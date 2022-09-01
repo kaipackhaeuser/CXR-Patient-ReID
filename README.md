@@ -10,7 +10,7 @@ an image of interest, highlighting the enormous data security and data privacy i
     <img src="overview.png" width="600">
 </figure>
 
-<span style="font-weight: bold; color: red"> Warning: </span> 
+**Warning:**
 This code is intended to be used for research purposes only. Any attempts to cause harm, in any way whatsoever, are 
 strictly prohibited.
 
