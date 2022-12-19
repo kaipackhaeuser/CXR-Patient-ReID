@@ -249,70 +249,93 @@ def sample_func(current_id, num_samples, name_array, id_array):
     return samples, name_array, id_array
 
 
-# forms blocks of size bucket_size, returns a boolean containing whether the operation was successful as well as the
-# block and updated id and name list
-def get_block(bucket_size, name_array, id_array):
+# This is the part that does the heavy lifting of the mining list creation. This function forms blocks of size
+# block_size, returns a boolean containing whether the operation was successful as well as the block and the updated id
+# and name list. It generally uses a mix of heuristics to guarantee that a set of conditions are met. Of these, the most
+# important one is, that images of classes are not unnecessarily split up and do not create singletons within a block,
+# meaning that if there is a patient with more than one image, it should be guaranteed that those images are not split
+# up in a way that there is a batch containing only a single one of these images instead of a group. To do so, the
+# modulo operator is used as a basis, so the amount of images can always be seen as relative to the block_size that is
+# used.
+def get_block(block_size, name_array, id_array):
     operation_successful = True
     block = []
+    # At the start, a random patient with multiple images is selected
     current_id = np.random.choice(id_array)
     ids, counts = np.unique(id_array, return_counts=True)
     current_count = counts[np.argwhere(ids == current_id)]
 
-    # case of exactly 8 samples
-    if current_count % bucket_size == 0:
-        samples, name_array, id_array = sample_func(current_id, bucket_size, name_array, id_array)
+    # In the case that the amount of images exactly matches the block_size or is a multiple of it, block_size images are
+    # used for the block and directly returned.
+    if current_count % block_size == 0:
+        samples, name_array, id_array = sample_func(current_id, block_size, name_array, id_array)
         for sample in samples:
             block.append((sample, current_id))
         return operation_successful, block, name_array, id_array
 
-    # more than 8 images with this id
-    if current_count > bucket_size:
-        # check wether its 9 or mod8 == 1
+    # If there are more than block_size images with this id, different cases are considered. If the amount of images is
+    # exactly one bigger than the block size, a pair of two images is collected from this class. When there are at least
+    # block_size + 2 images, there is a 5050 chance whether we simply collect block_size images or another amount. This
+    # other amount is normally current_count % block_size, so the rest that would remain after using the modulo
+    # operation, with block_size as the basis on the amount of images we have of the patient. The only special case we
+    # have here is the case where the resulting number would be block_size - 1, meaning that there would be exactly one
+    # spot in the block left, automatically leading to a singleton. Therefore, we sample block_size - 2 samples in this
+    # case.
+    if current_count > block_size:
+        # check whether its 9 or mod8 == 1
         if current_count % 8 == 1:
             samples, name_array, id_array = sample_func(current_id, 2, name_array, id_array)
             for sample in samples:
                 block.append((sample, current_id))
-        # 50/50 whether we fill the block with 8 or num%8
+        # 50/50 whether we fill the block with block_size or current_count % block_size
         else:
             if random.random() < 0.5:
-                # fill with 8
-                samples, name_array, id_array = sample_func(current_id, bucket_size, name_array, id_array)
+                # fill with the block_size
+                samples, name_array, id_array = sample_func(current_id, block_size, name_array, id_array)
                 for sample in samples:
                     block.append((sample, current_id))
                 return operation_successful, block, name_array, id_array
             else:
-                # case 7, or more generally if there is not enough space for another pair we only take bucket_size - 3
-                if current_count % bucket_size == bucket_size - 1:
-                    samples, name_array, id_array = sample_func(current_id, current_count % bucket_size - 2, name_array,
+                # In case block_size - 1, there is not enough space for another pair, and we only take block_size - 2
+                if current_count % block_size == block_size - 1:
+                    samples, name_array, id_array = sample_func(current_id, current_count % block_size - 2, name_array,
                                                                 id_array)
                     for sample in samples:
                         block.append((sample, current_id))
-                        # all other cases
+                # all the other cases
                 else:
-                    samples, name_array, id_array = sample_func(current_id, current_count % bucket_size, name_array,
+                    samples, name_array, id_array = sample_func(current_id, current_count % block_size, name_array,
                                                                 id_array)
                     for sample in samples:
                         block.append((sample, current_id))
     else:
-        samples, name_array, id_array = sample_func(current_id, current_count % bucket_size, name_array, id_array)
+        samples, name_array, id_array = sample_func(current_id, current_count % block_size, name_array, id_array)
         for sample in samples:
             block.append((sample, current_id))
-    rest = bucket_size - len(block)
+
+    # This part of the function describes the routine if the first sampling step was not enough to reach an amount of
+    # block_size images. From here on, a loop is used to iteratively fill up the remaining space in the block. In the
+    # first step, all patients whose mod rest is larger than one and those that would either completely fill the
+    # remaining block or would leave a remaining block size that is bigger than 1 are considered. If there are none
+    # left, we try to fill up the block with a patient that has a mod rest of size block_size - 1. If that is not
+    # possible as well, the loop ends and the unfinished block is returned with the operation_successful flag set to
+    # false.
+    rest = block_size - len(block)
 
     while rest != 0:
         ids, counts = np.unique(id_array, return_counts=True)
-        shortened_counts = np.mod(counts, bucket_size)
-        # filter possible ids, so   1 < num_ids and rest - num_ids < 2
+        shortened_counts = np.mod(counts, block_size)
+        # filter possible ids, so 1 < num_ids and rest - num_ids < 2
         possible_ids = ids[
             (shortened_counts > 1) & (((rest - shortened_counts) > 1) | ((rest - shortened_counts) == 0))]
 
         # no combinations available
         if possible_ids.size == 0:
-            possible_ids = ids[shortened_counts == bucket_size - 1]
-            # not even when splitting up 7s building Block failed
+            possible_ids = ids[shortened_counts == block_size - 1]
+            # not even when splitting up block_size - 1 block
             if possible_ids.size == 0:
                 operation_successful = False
-            # fill up with parts of a seven --> operation successful
+            # fill up with a block_size - 1 block --> operation successful
             else:
                 current_id = np.random.choice(possible_ids)
                 samples, name_array, id_array = sample_func(current_id, rest, name_array, id_array)
@@ -326,20 +349,25 @@ def get_block(bucket_size, name_array, id_array):
                                                         id_array)
             for sample in samples:
                 block.append((sample, current_id))
-            rest = bucket_size - len(block)
-        # the loop ended, so we reached blocksize 0 and were successful
+            rest = block_size - len(block)
+    # the loop ended, so we reached block_size 0 and were successful
     return operation_successful, block, name_array, id_array
 
 
-# The list/batch creation workflow. It generally created for a batch size of 32 and a block size of 8, but could be
-# revamped without much of a problem
+# The listbatch creation workflow. The main idea was to create a sample list from the target csv that can then be
+# directly iterated over when using a data loader. For doing so, patients are sampled in blocks which then get appended
+# to the final list. The block_size determines the maximum number of images from a patient that can be sampled at the
+# same time. The batch size should be a multiple of the block_size so the sampling works correctly. Generally this was
+# mainly done with a block_size of 8 and a batch size of 32 in mind, but could potentially be altered. This could,
+# however, lead to different results compared to the ones published in the paper.
+#
+#
+# The higher level of the list creation. Here, blocks are step by step sampled and appended to the list used in the data
+# loader. Blocks that cannot be completed successfully are collected and then later on added to the list once there are
+# no more possibilities of creating a block.
 def build_mining_list_32(name_array, id_array, block_size):
     mining_list = []
-    next_eight = []
     garbage_collector = []
-    list_counter = 0
-    row_order = [0, 4, 2, 6, 1, 5, 3, 7]
-
     while name_array.size != 0:
         operation_successful, block, name_array, id_array = get_block(block_size, name_array, id_array)
 
@@ -347,19 +375,8 @@ def build_mining_list_32(name_array, id_array, block_size):
             for part in block:
                 garbage_collector.append(part)
         else:
-            next_eight.append(block)
-            list_counter += 1
-            if len(next_eight) == 4:
-                for x in row_order:
-                    for y in range(len(next_eight)):
-                        mining_list.append(next_eight[y][x])
-                list_counter = 0
-                next_eight = []
-
-    if next_eight:
-        for eight in next_eight:
-            for one in eight:
-                mining_list.append(one)
+            for image_name in block:
+                mining_list.append(image_name)
 
     if garbage_collector:
         for garbage in garbage_collector:
